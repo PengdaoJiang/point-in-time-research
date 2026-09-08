@@ -1,0 +1,28 @@
+{
+  "release": "2026-09-source-derived",
+  "files": [
+    ".gitattributes",
+    ".github/workflows/test.yml",
+    ".gitignore",
+    "LICENSE",
+    "README.md",
+    "demo.py",
+    "docs/case-studies.md",
+    "docs/source-provenance.md",
+    "public-files.json",
+    "qplatform/__init__.py",
+    "qplatform/dependence_statistics.py",
+    "qplatform/point_in_time_universe.py",
+    "qplatform/research_guard.py",
+    "qplatform/sequential_validation.py",
+    "qplatform/symbols.py",
+    "qplatform/time_series_diagnostics.py",
+    "requirements.txt",
+    "tests/test_dependence_statistics.py",
+    "tests/test_point_in_time_universe.py",
+    "tests/test_public_entry.py",
+    "tests/test_research_guard.py",
+    "tests/test_sequential_validation.py",
+    "tests/test_time_series_diagnostics.py"
+  ]
+}
