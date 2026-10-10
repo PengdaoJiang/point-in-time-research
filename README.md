@@ -25,6 +25,10 @@ python -B demo.py --out demo-output
 
 工程取舍和反例见 [case studies](docs/case-studies.md)。源实现与公开适配见 [provenance](docs/source-provenance.md)。
 
+## 可恢复实验运行
+
+新增实际平台中的[实验执行内核](docs/resumable-runtime.md)：多阶段依赖调度、输入与代码绑定、完整计算单元检查点、进程托管、内存压力保护和失败分支隔离。它回答“任务中断后哪些计算可以安全复用”，与时点正确性检查相互补充。源码、原回归测试和合成工作进程一并保留。
+
 ## Engineering context
 
 This is an extracted research subsystem, not a new toy backtest written for this repository. The original platform also manages data refresh, research programs and execution observations; those account-facing integrations are deliberately separate. Core module names and implementations are retained so the code remains traceable.
