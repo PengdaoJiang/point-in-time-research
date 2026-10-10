@@ -1,5 +1,7 @@
 # Resumable research execution
 
+`python checkpoint_demo.py` runs an offline walkthrough of the actual kernel: resume a complete unit, refuse reuse under changed input identity, reject a tampered artifact and keep not-yet-observable labels out of fit readiness. The example uses synthetic bytes, not trading results. The runtime modules have been synchronized with the current source implementation.
+
 The runtime is extracted from the same research platform as the point-in-time validation modules. Its job is to preserve execution identity and completed computation across interruption, while keeping scientific acceptance separate from process success.
 
 `qplatform/research_runtime.py` runs a manifest-defined dependency graph. Each stage binds input and code hashes, finite memory/time budgets and required artifacts. Failed branches can block their dependants while independent branches continue. A partial graph remains partial even when every runnable branch exits successfully.
