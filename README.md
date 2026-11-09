@@ -29,6 +29,13 @@ python -B demo.py --out demo-output
 
 新增实际平台中的[实验执行内核](docs/resumable-runtime.md)：多阶段依赖调度、输入与代码绑定、完整计算单元检查点、进程托管、内存压力保护和失败分支隔离。它回答“任务中断后哪些计算可以安全复用”，与时点正确性检查相互补充。源码、原回归测试和合成工作进程一并保留。
 
+11 月进一步接入[共享数据与事件交接](docs/data-and-event-runtime.md)：不可变 Parquet 快照、内容去重、按列读取、结果包恢复、环境指纹，以及终态观察、投递回执和接收确认。计算完成、消息入队、负责人消费和研究结论分别记录。
+
+```sh
+python -B data_plane_demo.py
+python -B scripts/qpt.py research-dispatch --help
+```
+
 ## Engineering context
 
 This is an extracted research subsystem, not a new toy backtest written for this repository. The original platform also manages data refresh, research programs and execution observations; those account-facing integrations are deliberately separate. Core module names and implementations are retained so the code remains traceable.

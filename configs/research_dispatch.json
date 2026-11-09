@@ -1,0 +1,20 @@
+{
+  "schema": "research_dispatch_policy_v1",
+  "research_thread_id": "00000000-0000-4000-8000-000000000001",
+  "platform_thread_id": "00000000-0000-4000-8000-000000000002",
+  "observer": {
+    "model": "gpt-6-luna",
+    "effort": "low",
+    "timeout_s": 180,
+    "max_packet_chars": 12000,
+    "max_memory_bytes": 2147483648,
+    "automatic_retry": false
+  },
+  "delivery": {
+    "transport": "codex_queue",
+    "timeout_s": 30,
+    "on_uncertain_delivery": "manual_reconciliation_no_automatic_retry",
+    "model_override": null,
+    "ack_timeout_s": 120
+  }
+}

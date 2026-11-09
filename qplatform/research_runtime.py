@@ -6,7 +6,6 @@ gates, resource admission, process custody, receipts and failure visibility.
 from __future__ import annotations
 
 import contextlib
-import errno
 import hashlib
 import json
 import math
@@ -24,6 +23,7 @@ import psutil
 
 from .research_process import ProcessGroup
 from .research_readiness import artifact_path, audit_readiness, file_digest, read_json
+from .control_io import atomic_json as _atomic, windows_access_conflict as _windows_access_conflict
 
 
 def _now() -> str:
@@ -32,33 +32,6 @@ def _now() -> str:
 
 def _digest(value: Any) -> str:
     return hashlib.sha256(json.dumps(value, sort_keys=True, allow_nan=False).encode()).hexdigest()
-
-
-def _windows_access_conflict(exc: OSError) -> bool:
-    return getattr(exc, "winerror", None) in {5, 32, 33} or (
-        os.name == "nt" and isinstance(exc, PermissionError) and exc.errno == errno.EACCES
-    )
-
-
-def _atomic(path: Path, value: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
-    try:
-        with temporary.open("w", encoding="utf-8") as stream:
-            json.dump(value, stream, indent=2, sort_keys=True, allow_nan=False)
-            stream.flush()
-            os.fsync(stream.fileno())
-        # A Windows reader may briefly deny replacement of the old snapshot.
-        for delay in (.01, .02, .04, .08, .1, None):
-            try:
-                os.replace(temporary, path)
-                break
-            except OSError as exc:
-                if delay is None or not _windows_access_conflict(exc):
-                    raise
-                time.sleep(delay)
-    finally:
-        temporary.unlink(missing_ok=True)
 
 
 def _read_progress(path: Path) -> Any:
@@ -129,6 +102,12 @@ def _inputs(workspace: Path, manifest: dict[str, Any], stage: dict[str, Any]) ->
         path = (workspace / reference["path"]).resolve()
         if not path.is_file() or file_digest(path) != reference["sha256"]:
             raise ValueError(f"input_binding_mismatch:{key}")
+        if reference.get("kind") == "research_snapshot":
+            from .research_store import ResearchTable
+            table = ResearchTable(path)
+            if table.manifest is None:
+                raise ValueError("research_snapshot binding requires a snapshot manifest")
+            table.verify_all()
         result[key] = reference
     return result
 
@@ -142,9 +121,13 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
     for ref in manifest["bindings"].values():
         if ref["role"] not in {"source", "science", "contract", "entrypoint"} or not re.fullmatch(r"[0-9a-f]{64}", ref["sha256"]):
             raise ValueError("invalid input binding")
+        if ref.get("kind") not in {None, "research_snapshot"}:
+            raise ValueError("unknown input binding kind")
+        if ref.get("kind") == "research_snapshot" and ref["role"] != "source":
+            raise ValueError("research snapshot must be a source binding")
     known = {}
     for stage in manifest["stages"]:
-        allowed = {"id", "uses", "command", "phase", "depends_on", "pilot_stage", "outputs", "resources", "progress_file", "readiness_contract", "checkpoint_units", "memory_pressure", "unavailable"}
+        allowed = {"id", "uses", "command", "phase", "depends_on", "pilot_stage", "outputs", "resources", "progress_file", "readiness_contract", "checkpoint_units", "memory_pressure", "unavailable", "parallel_batch"}
         if stage.keys() - allowed:
             raise ValueError(f"unknown stage fields: {sorted(stage.keys() - allowed)}")
         name = stage["id"]
@@ -171,6 +154,10 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
                 raise ValueError(f"invalid resource bound: {key}")
         if type(stage.get("checkpoint_units", False)) is not bool:
             raise ValueError("checkpoint_units must be boolean")
+        if type(stage.get("parallel_batch", False)) is not bool:
+            raise ValueError("parallel_batch must be boolean")
+        if stage.get("parallel_batch") and (not stage.get("checkpoint_units") or "batch_results.json" not in stage["outputs"]):
+            raise ValueError("parallel batch requires unit checkpoints and batch_results.json")
         _memory_policy(stage)
         unavailable = stage.get("unavailable")
         if unavailable is not None:
@@ -182,6 +169,8 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
         if stage.get("progress_file"):
             artifact_path(Path.cwd(), stage["progress_file"])
         if stage["phase"] == "pilot":
+            from .research_readiness import validate_pilot_contract
+            validate_pilot_contract(stage["readiness_contract"])
             scenarios = stage["readiness_contract"]["scenarios"]
             if not scenarios:
                 raise ValueError("pilot requires scenario-level evidence")
@@ -290,6 +279,10 @@ def _run_child(
     environment["PYTHONPATH"] = os.pathsep.join(filter(None, (code_root, environment.get("PYTHONPATH"))))
     environment.update(QPT_OUTPUT_DIR=str(outputs), QPT_BINDING_ID=binding,
                        QPT_STOP_FILE=str(attempt / "stop_requested.json"), PYTHONDONTWRITEBYTECODE="1")
+    environment.update(QPT_STAGE_MEMORY_BYTES=str(int(resources["max_memory_bytes"])),
+                       QPT_STAGE_AVAILABLE_FLOOR_BYTES=str(int(resources["available_floor_bytes"])))
+    environment.update(QPT_RUNTIME_BINDING_FILE=str(attempt / "binding.json"),
+                       QPT_PARALLEL_BATCH="1" if stage.get("parallel_batch") else "0")
     # Do not accidentally inherit another run's unit namespace.
     environment.pop("QPT_CHECKPOINT_DIR", None)
     environment.pop("QPT_WORK_BINDING_ID", None)
@@ -441,6 +434,9 @@ def _reusable(root: Path, stage: dict[str, Any], binding: str) -> dict[str, Any]
         directory = receipt_path.parent / "artifacts"
         if any(file_digest(artifact_path(directory, name)) != digest for name, digest in receipt["artifacts"].items()):
             return None
+        if stage.get("parallel_batch"):
+            from .research_batch import verify_results
+            verify_results(directory / "batch_results.json", root / "checkpoints" / stage["id"], receipt["work_binding_id"])
         if stage["phase"] == "pilot" and not audit_readiness(directory, stage["readiness_contract"], binding)["ready"]:
             return None
         return {"receipt": str(receipt_path), "sha256": ref["sha256"], "binding_id": binding, "reused": True}
@@ -462,7 +458,8 @@ def run_manifest(workspace: Path, manifest_path: Path, *, poll_s: float = 1.0, r
     root = _root(workspace, manifest["run_id"])
     owner = _identity(os.getpid())
     platform_binding = {name: file_digest(Path(__file__).with_name(name)) for name in (
-        "research_runtime.py", "research_readiness.py", "research_process.py", "research_checkpoints.py")}
+        "research_runtime.py", "research_readiness.py", "research_process.py", "research_checkpoints.py", "research_result_bundle.py",
+        "research_store.py", "research_batch.py", "control_io.py")}
     platform_binding.update(python=sys.version, executable=sys.executable, psutil=psutil.__version__)
     completed: dict[str, Any] = {}
     outcomes: dict[str, Any] = {stage["id"]: {"status": "pending"} for stage in manifest["stages"]}
@@ -576,6 +573,9 @@ def run_manifest(workspace: Path, manifest_path: Path, *, poll_s: float = 1.0, r
                     if child["blocker"]:
                         raise RuntimeError(child["blocker"])
                     _inputs(workspace, manifest, stage)
+                    if stage.get("parallel_batch"):
+                        from .research_batch import verify_results
+                        verify_results(attempt / "artifacts" / "batch_results.json", root / "checkpoints" / stage["id"], work_binding)
                     artifacts = {}
                     for name in stage["outputs"]:
                         path = artifact_path(attempt / "artifacts", name)

@@ -14,6 +14,7 @@ from typing import Any
 
 from .research_readiness import artifact_path, file_digest, read_json
 from .research_runtime import _atomic, _digest
+from .research_result_bundle import ResultBundle
 
 
 class CheckpointStore:
@@ -22,6 +23,56 @@ class CheckpointStore:
             raise ValueError("checkpoint requires a runtime work binding")
         self.binding = work_binding_id
         self.root = Path(root).resolve() / work_binding_id
+        self._bundle = None
+        self._bundle_signature = None
+
+    def close(self):
+        if self._bundle is not None:
+            self._bundle.close()
+            self._bundle = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+
+    def packed_bundle(self):
+        path = self.root / 'packed.json'
+        if not path.exists():
+            return None
+        ref = read_json(path)
+        if ref.get('schema') != 'research_packed_checkpoints_v1' or ref.get('work_binding_id') != self.binding:
+            raise ValueError('packed_checkpoint_binding_mismatch')
+        manifest = Path(ref['manifest'])
+        members = (path, manifest, manifest.parent / 'index.sqlite')
+        signature = tuple((str(p), p.stat().st_size, p.stat().st_mtime_ns, p.stat().st_ctime_ns) for p in members)
+        if self._bundle is None or signature != self._bundle_signature:
+            self.close()
+            self._bundle = ResultBundle(manifest, ref['sha256'])
+            self._bundle_signature = signature
+        return self._bundle, ref
+
+    def register_bundle(self, manifest: Path, expected_sha256: str):
+        with ResultBundle(manifest, expected_sha256) as bundle:
+            bundle.verify_all()
+            units = [row[0] for row in bundle.db.execute('SELECT DISTINCT unit FROM artifacts')]
+            receipts = {}
+            for unit in units:
+                packed = bundle.unit_receipt(unit, self.binding)
+                loose = self.load(unit)
+                if loose is None or loose['receipt_sha256'] != packed['receipt_sha256']:
+                    raise ValueError('packed_checkpoint_source_mismatch')
+                receipts[unit] = packed['receipt_sha256']
+        existing = self.packed_bundle()
+        if existing:
+            if existing[1]['receipts'] != receipts:
+                raise ValueError('packed_checkpoint_immutable_conflict')
+            return existing[1]
+        ref = {'schema': 'research_packed_checkpoints_v1', 'work_binding_id': self.binding,
+               'manifest': str(Path(manifest).resolve()), 'sha256': expected_sha256, 'receipts': receipts}
+        _atomic(self.root / 'packed.json', ref)
+        return ref
 
     @classmethod
     def from_environment(cls) -> "CheckpointStore":
@@ -35,7 +86,19 @@ class CheckpointStore:
     def load(self, unit_id: str) -> dict[str, Any] | None:
         directory = self._directory(unit_id)
         if not directory.exists():
-            return None
+            packed = self.packed_bundle()
+            if packed is None or unit_id not in packed[1]['receipts']:
+                return None
+            bundle, ref = packed
+            loaded = bundle.unit_receipt(unit_id, self.binding)
+            if loaded['receipt_sha256'] != ref['receipts'][unit_id]:
+                raise ValueError('packed_checkpoint_receipt_mismatch')
+            # Do not rehydrate every unit merely to count/reuse completed work.
+            # Legacy path-based consumers must explicitly materialize before use.
+            for name in loaded['receipt']['artifacts']:
+                with bundle.open_artifact(unit_id, name):
+                    pass
+            return {**loaded, 'directory': None, 'packed': ref}
         receipt = read_json(directory / "receipt.json")
         if (receipt.get("schema") != "research_unit_checkpoint_v1"
                 or receipt.get("unit_id") != unit_id
@@ -47,6 +110,21 @@ class CheckpointStore:
                 raise ValueError(f"checkpoint_artifact_mismatch:{unit_id}:{name}")
         return {"directory": directory / "artifacts", "receipt": receipt,
                 "receipt_sha256": file_digest(directory / "receipt.json")}
+
+    def read_bytes(self, unit_id: str, name: str):
+        loaded = self.load(unit_id)
+        if loaded is None or name not in loaded['receipt']['artifacts']:
+            raise KeyError((unit_id, name))
+        if loaded['directory'] is not None:
+            return artifact_path(loaded['directory'], name).read_bytes()
+        return self.packed_bundle()[0].read_bytes(unit_id, name)
+
+    def restore_unit(self, unit_id: str, destination: Path):
+        packed = self.packed_bundle()
+        if packed is None or unit_id not in packed[1]['receipts']:
+            raise ValueError('unit_has_no_verified_result_package')
+        self.load(unit_id)
+        return packed[0].restore_unit(unit_id, destination, binding=self.binding)
 
     def seal(self, unit_id: str, source: Path, outputs: list[str]) -> dict[str, Any]:
         if not outputs or len(set(outputs)) != len(outputs):

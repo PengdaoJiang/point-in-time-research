@@ -9,6 +9,35 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+PILOT_ADMISSION_SCHEMA = "research_pilot_admission_v2"
+
+
+def validate_pilot_contract(contract: dict[str, Any], *, required: bool = False) -> None:
+    """New admission is explicit; legacy frozen receipts retain their contract."""
+    schema = contract.get("schema")
+    if schema is None and not required:
+        return
+    if schema != PILOT_ADMISSION_SCHEMA:
+        raise ValueError("new_pilot_requires_research_pilot_admission_v2")
+    scenarios = contract.get("scenarios", {})
+    if not scenarios:
+        raise ValueError("pilot_requires_scenarios")
+    market_minimum = 0
+    for name, spec in scenarios.items():
+        total = spec.get("minimum_resolved_labels")
+        market = spec.get("minimum_resolved_market_labels")
+        if type(total) is not int or total < 1 or type(market) is not int or not 0 <= market <= total:
+            raise ValueError(f"{name}:invalid_resolved_evidence_minimum")
+        market_minimum += market
+    if not market_minimum:
+        raise ValueError("pilot_requires_market_evidence_not_only_cash")
+
+
+def validate_new_pilot_admission(manifest: dict[str, Any]) -> None:
+    for stage in manifest["stages"]:
+        if stage["phase"] == "pilot" and not stage.get("unavailable"):
+            validate_pilot_contract(stage["readiness_contract"], required=True)
+
 
 def file_digest(path: Path) -> str:
     digest = hashlib.sha256()
@@ -113,6 +142,7 @@ def audit_readiness(
     reports: dict[str, Any] = {}
     artifacts: dict[str, str] = {}
     try:
+        validate_pilot_contract(contract)
         evidence_path = artifact_path(directory, evidence_name)
         evidence = read_json(evidence_path)
         artifacts[evidence_name] = file_digest(evidence_path)
@@ -162,6 +192,12 @@ def audit_readiness(
                     else:
                         local.append("unknown_label_status")
                     labels[key] = label
+
+            if contract.get("schema") == PILOT_ADMISSION_SCHEMA:
+                if counts["resolved_market"] + counts["resolved_cash"] < spec["minimum_resolved_labels"]:
+                    local.append("insufficient_resolved_replay_evidence")
+                if counts["resolved_market"] < spec["minimum_resolved_market_labels"]:
+                    local.append("insufficient_resolved_market_evidence")
 
             fits = []
             if row.get("fits"):
