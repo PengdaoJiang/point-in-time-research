@@ -20,6 +20,8 @@ from qplatform.research_runtime import _digest
 
 class ObserverInputTests(unittest.TestCase):
     def setUp(self):
+        # Transport is mocked; Python is a portable stand-in, not a live Codex binary.
+        self.enterContext(patch('qplatform.research_observer.resolve_cli', return_value=Path(sys.executable)))
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.directory = Path(self.temp.name)

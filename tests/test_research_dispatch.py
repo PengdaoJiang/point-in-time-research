@@ -28,6 +28,8 @@ def report_for(packet):
 
 class DispatchTests(unittest.TestCase):
     def setUp(self):
+        # Transport is mocked; Python is a portable stand-in, not a live Codex binary.
+        self.enterContext(patch('qplatform.research_observer.resolve_cli', return_value=Path(sys.executable)))
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
