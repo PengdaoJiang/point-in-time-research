@@ -1,47 +1,40 @@
-# Point-in-Time Research
+# Reproducible Experiment Runtime
 
-股票与 ETF 研究中的时点数据、实验隔离和序列验证内核。从持续维护的多频研究平台提取实际实现，聚焦一个问题：**结果看起来不错时，怎样确认它没有使用未来信息、混入账户状态，或误读时间相关性？**
+Versioned data, recoverable computation and temporal validation for long-running research. Extracted from a maintained time-series research platform, the code keeps three questions separate: which data was available, which computation actually ran, and which conclusions the evidence supports.
 
-## 运行一个完整案例
+## Choose a reading route
 
-Python 3.10+：
+| Layer | What it does | Guide |
+| --- | --- | --- |
+| Execution | Dependency scheduling, complete compute-unit checkpoints, process supervision, memory pressure and isolated failure branches | [Resumable runtime](docs/resumable-runtime.md) |
+| Data and handoff | Immutable Parquet snapshots, content reuse, selected-column reads, environment fingerprints, result bundles and acknowledged terminal events | [Data and event runtime](docs/data-and-event-runtime.md) |
+| Experimental validity | As-of membership, future-information checks, rolling windows, dependence statistics and temporal diagnostics | [Research cases](docs/case-studies.md) |
+
+## Run offline
+
+Python 3.10+:
 
 ```sh
 python -m pip install -r requirements.txt
 python -B -m pytest -q
 python -B demo.py --out demo-output
-```
-
-入口使用明确标注的合成输入，输出成员快照审计、CSV、滚动窗口报告及失败分类。无需行情账户或模型服务。检查 `demo-output/case.json`、`coverage.csv` 和 `validation/summary.md`，即可追到源码。
-
-## 源码阅读路线
-
-| 问题 | 实现 | 可复核行为 |
-| --- | --- | --- |
-| 历史时点能看到哪些标的？ | [point_in_time_universe.py](qplatform/point_in_time_universe.py) | 只选决策时点之前的快照；过期和未覆盖日期单独报告 |
-| 特征与研究输入有没有越界？ | [research_guard.py](qplatform/research_guard.py) | 未来字段、账户隔离、成交可观测性和重复研究来源的检查 |
-| 结果是否依赖某一个起点？ | [sequential_validation.py](qplatform/sequential_validation.py) | 重叠多起点窗口、日历分段和极佳日期敏感性 |
-| 时间相关性如何影响结论？ | [dependence_statistics.py](qplatform/dependence_statistics.py)、[time_series_diagnostics.py](qplatform/time_series_diagnostics.py) | HAC、分块重采样、序列及波动记忆诊断 |
-
-工程取舍和反例见 [case studies](docs/case-studies.md)。源实现与公开适配见 [provenance](docs/source-provenance.md)。
-
-## 可恢复实验运行
-
-新增实际平台中的[实验执行内核](docs/resumable-runtime.md)：多阶段依赖调度、输入与代码绑定、完整计算单元检查点、进程托管、内存压力保护和失败分支隔离。它回答“任务中断后哪些计算可以安全复用”，与时点正确性检查相互补充。源码、原回归测试和合成工作进程一并保留。
-
-11 月进一步接入[共享数据与事件交接](docs/data-and-event-runtime.md)：不可变 Parquet 快照、内容去重、按列读取、结果包恢复、环境指纹，以及终态观察、投递回执和接收确认。计算完成、消息入队、负责人消费和研究结论分别记录。
-
-```sh
 python -B data_plane_demo.py
 python -B scripts/qpt.py research-dispatch --help
 ```
 
-## Engineering context
+Examples use synthetic inputs and write their own outputs. `demo-output/case.json`, `coverage.csv` and `validation/summary.md` connect results to the source implementation. No market-data account or model service is needed.
 
-This is an extracted research subsystem, not a new toy backtest written for this repository. The original platform also manages data refresh, research programs and execution observations; those account-facing integrations are deliberately separate. Core module names and implementations are retained so the code remains traceable.
+## Important distinctions
 
-Development uses Codex-assisted implementation and iterative engineering. Contract checks inspect supplied evidence; a boolean declaration or clean feature name alone cannot prove a strategy causal. Demonstration returns are synthetic, not trading performance.
+- A reusable checkpoint binds input content, code and numerical dependencies to a complete compute unit. Corrupt or mismatched prior work is refused.
+- A calculation can finish before its notification is delivered or acknowledged. The event runtime preserves those separate states.
+- A valid input snapshot does not establish an unbiased research conclusion. The temporal checks and statistical methods remain separate from execution success.
+- Data access can select partitions and columns without loading an entire historical carrier into each worker.
+
+The original application is market time-series research. Its account-facing integrations and proprietary data are excluded. Public demonstrations are synthetic and make no trading-performance claim. The reusable execution layer is independently inspectable alongside that domain-specific validation code.
+
+Module identities and extraction adaptations are recorded in [source provenance](docs/source-provenance.md). The repository retains the actual implementation and original offline regression cases.
 
 ## License
 
-[MIT](LICENSE). NumPy, pandas, PyArrow and pytest are separately installed dependencies; their licenses remain with their projects. No broker implementation or proprietary market dataset is redistributed.
+[MIT](LICENSE). NumPy, pandas, PyArrow and pytest are installed separately under their own licenses.
