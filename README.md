@@ -1,6 +1,8 @@
 # Reproducible Experiment Runtime
 
-Versioned data, recoverable computation and temporal validation for long-running research. Extracted from a maintained time-series research platform, the code keeps three questions separate: which data was available, which computation actually ran, and which conclusions the evidence supports.
+Research orchestration, versioned data and reproducible computation for long-running experiments. Extracted from a maintained time-series platform, the architecture assigns question design and result judgment to the research task, long numerical work to a model-free runner, and bounded event interpretation to an optional model observer.
+
+The [orchestration guide](docs/research-orchestration.md) explains that division of work and its connection to experiment design, checkpoint reuse and event handoff. Temporal validation separately determines which conclusions the completed computation can support.
 
 ## Choose a reading route
 
